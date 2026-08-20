@@ -96,7 +96,7 @@ def try_template_match(question: str, tables: SchemaTables) -> Optional[str]:
     # "list/show/get all <table>", optionally followed by a sort clause, e.g.
     # "list all customers in ascending order of name" or
     # "list all customers sorted by name descending".
-    m = re.fullmatch(r"(?:list|show|get)(?: me)? all (\w+)", base_q)
+    m = re.fullmatch(r"(?:list|show|get)(?: me)? all(?: the)? (\w+)", base_q)
     if m:
         table = resolve_table(m.group(1), tables)
         if table:
@@ -111,8 +111,8 @@ def try_template_match(question: str, tables: SchemaTables) -> Optional[str]:
             return f"SELECT * FROM {table} LIMIT 100"
 
     # "how many <table> are there" / "count of <table>" / "how many <table> do we have"
-    m = re.fullmatch(r"how many (\w+)(?: are there| do we have)?", q) or re.fullmatch(
-        r"count(?: of)? (\w+)", q
+    m = re.fullmatch(r"how many(?: the)? (\w+)(?: are there| do we have)?", q) or re.fullmatch(
+        r"count(?: of)?(?: the)? (\w+)", q
     )
     if m:
         table = resolve_table(m.group(1), tables)
@@ -143,7 +143,7 @@ def try_template_match(question: str, tables: SchemaTables) -> Optional[str]:
                 )
 
     # "average <column> of/in <table>"
-    m = re.fullmatch(r"average (\w+) (?:of|in|for) (\w+)", q)
+    m = re.fullmatch(r"average (\w+) (?:of|in|for)(?: the)? (\w+)", q)
     if m:
         column_word, table_word = m.groups()
         table = resolve_table(table_word, tables)

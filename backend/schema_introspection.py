@@ -4,6 +4,44 @@ from sqlalchemy.engine import Engine
 INTERNAL_APP_TABLES = ["query_cache", "dynamic_query_cache", "cache_audit_log"]
 
 
+def _reflect_all_tables(inspector, all_tables: list[str]) -> tuple[dict, dict, dict]:
+    """Fetches columns/PKs/FKs for every table in as few round trips as possible.
+
+    Prefers SQLAlchemy's batched `get_multi_*` reflection APIs (one query per
+    metadata kind, regardless of table count) since per-table reflection
+    calls each cost a full network round trip — on a high-latency connection
+    (e.g. a remote serverless Postgres instance) that adds up to multiple
+    seconds per table. Falls back to the old per-table calls for dialects
+    that don't support the batched APIs.
+    """
+    try:
+        multi_columns = inspector.get_multi_columns(schema=None)
+        multi_pks = inspector.get_multi_pk_constraint(schema=None)
+        multi_fks = inspector.get_multi_foreign_keys(schema=None)
+        columns_by_table = {name: multi_columns.get((None, name), []) for name in all_tables}
+        pks_by_table = {name: multi_pks.get((None, name), {}) for name in all_tables}
+        fks_by_table = {name: multi_fks.get((None, name), []) for name in all_tables}
+        return columns_by_table, pks_by_table, fks_by_table
+    except NotImplementedError:
+        pass
+
+    columns_by_table, pks_by_table, fks_by_table = {}, {}, {}
+    for table_name in all_tables:
+        try:
+            columns_by_table[table_name] = inspector.get_columns(table_name)
+        except Exception:
+            columns_by_table[table_name] = []
+        try:
+            pks_by_table[table_name] = inspector.get_pk_constraint(table_name)
+        except Exception:
+            pks_by_table[table_name] = {}
+        try:
+            fks_by_table[table_name] = inspector.get_foreign_keys(table_name)
+        except Exception:
+            fks_by_table[table_name] = []
+    return columns_by_table, pks_by_table, fks_by_table
+
+
 def get_database_schema(engine: Engine) -> dict:
     """Introspect the database and return table/column metadata, primary keys, and relationships,
 
@@ -21,52 +59,41 @@ def get_database_schema(engine: Engine) -> dict:
         if not t.startswith("sqlite_") and t.lower() not in excluded_set
     ]
 
-    # Pre-collect foreign keys to identify FK columns and build relationships list
-    table_fks: dict[str, list[dict]] = {}
-    for table_name in all_tables:
-        try:
-            fks = inspector.get_foreign_keys(table_name)
-            table_fks[table_name] = fks or []
-            for fk in table_fks[table_name]:
-                referred_table = fk.get("referred_table")
-                constrained_cols = fk.get("constrained_columns") or []
-                referred_cols = fk.get("referred_columns") or []
+    columns_by_table, pks_by_table, fks_by_table = _reflect_all_tables(inspector, all_tables)
 
-                # Ignore foreign keys that point to excluded internal tables
-                if (
-                    referred_table
-                    and referred_table.lower() not in excluded_set
-                    and not referred_table.startswith("sqlite_")
-                ):
-                    for s_col, t_col in zip(constrained_cols, referred_cols):
-                        if s_col and t_col:
-                            relationships.append({
-                                "id": f"{table_name}.{s_col}->{referred_table}.{t_col}",
-                                "source_table": table_name,
-                                "source_column": s_col,
-                                "target_table": referred_table,
-                                "target_column": t_col,
-                                "constraint_name": fk.get("name"),
-                            })
-        except Exception:
-            table_fks[table_name] = []
+    # Build relationships list from foreign keys
+    for table_name in all_tables:
+        for fk in fks_by_table.get(table_name, []) or []:
+            referred_table = fk.get("referred_table")
+            constrained_cols = fk.get("constrained_columns") or []
+            referred_cols = fk.get("referred_columns") or []
+
+            # Ignore foreign keys that point to excluded internal tables
+            if (
+                referred_table
+                and referred_table.lower() not in excluded_set
+                and not referred_table.startswith("sqlite_")
+            ):
+                for s_col, t_col in zip(constrained_cols, referred_cols):
+                    if s_col and t_col:
+                        relationships.append({
+                            "id": f"{table_name}.{s_col}->{referred_table}.{t_col}",
+                            "source_table": table_name,
+                            "source_column": s_col,
+                            "target_table": referred_table,
+                            "target_column": t_col,
+                            "constraint_name": fk.get("name"),
+                        })
 
     # Extract column definitions and primary keys for each table
     for table_name in all_tables:
-        try:
-            columns = inspector.get_columns(table_name)
-        except Exception:
-            columns = []
-
-        try:
-            pk_constraint = inspector.get_pk_constraint(table_name)
-            pk_columns = set(pk_constraint.get("constrained_columns") or [])
-        except Exception:
-            pk_columns = set()
+        columns = columns_by_table.get(table_name) or []
+        pk_constraint = pks_by_table.get(table_name) or {}
+        pk_columns = set(pk_constraint.get("constrained_columns") or [])
 
         # Set of foreign key column names in this table
         fk_columns = set()
-        for fk in table_fks.get(table_name, []):
+        for fk in fks_by_table.get(table_name, []) or []:
             referred_table = fk.get("referred_table")
             if (
                 referred_table

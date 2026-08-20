@@ -150,7 +150,7 @@ def schema(connection_id: str | None = None):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail="Failed to read the database schema.")
+        raise HTTPException(status_code=500, detail=f"Failed to read the database schema: {str(e)}")
 
 
 @app.post("/database/upload", response_model=UploadDatabaseResponse)
@@ -229,7 +229,7 @@ def query(request: QueryRequest, db: Session = Depends(get_db_session)):
             tables = schema_data.get("tables", {})
             schema_context = format_schema_for_context(schema_data)
         except Exception as e:
-            raise HTTPException(status_code=500, detail="Failed to read the database schema.")
+            raise HTTPException(status_code=500, detail=f"Failed to read the database schema: {str(e)}")
 
         # Validate the question before hitting templates or the LLM.
         try:
@@ -291,7 +291,7 @@ def query(request: QueryRequest, db: Session = Depends(get_db_session)):
         try:
             affected = _run_write(sql, engine)
         except Exception as e:
-            raise HTTPException(status_code=400, detail="Write query failed to execute.")
+            raise HTTPException(status_code=400, detail=f"Write query failed to execute: {str(e)}")
 
         execution_time_ms = int((time.perf_counter() - start_time) * 1000)
 
@@ -322,7 +322,7 @@ def query(request: QueryRequest, db: Session = Depends(get_db_session)):
     try:
         columns, rows = _run_select(sql, engine)
     except Exception as e:
-        raise HTTPException(status_code=400, detail="Query failed to run")
+        raise HTTPException(status_code=400, detail=f"Query failed to run: {str(e)}")
 
     execution_time_ms = int((time.perf_counter() - start_time) * 1000)
 
@@ -380,6 +380,6 @@ def execute_sql(request: ExecuteSQLRequest):
     try:
         columns, rows = _run_select(request.sql, engine)
     except Exception as e:
-        raise HTTPException(status_code=400, detail="Query failed to run. Please check your SQL and try again.")
+        raise HTTPException(status_code=400, detail=f"Query failed to run. Please check your SQL and try again: {str(e)}")
 
     return {"sql": request.sql, "columns": columns, "rows": rows, "row_count": len(rows)}
